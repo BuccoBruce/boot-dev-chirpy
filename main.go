@@ -8,6 +8,9 @@ import (
 
 func main() {
 	myHandler := http.NewServeMux()
+	fs := http.FileServer(http.Dir("."))
+
+	myHandler.Handle("/", fs)
 
 	s := &http.Server{
 		Addr:           ":8080",
