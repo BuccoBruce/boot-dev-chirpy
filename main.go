@@ -3,26 +3,55 @@ package main
 import (
 	"log"
 	"net/http"
-	"time"
+	"strconv"
+	"sync/atomic"
 )
 
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
+
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileserverHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (cfg *apiConfig) getHits() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		myHits := cfg.fileserverHits.Load()
+		result := "Hits: " + strconv.Itoa(int(myHits))
+
+		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(200)
+		w.Write([]byte(result))
+	})
+}
+
+func (cfg *apiConfig) resetHits() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileserverHits.Store(0)
+	})
+}
+
 func main() {
+
+	apiCfg := apiConfig{}
 	myHandler := http.NewServeMux()
-	readiness_endpoint := func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type:", "text/plain; charset=utf-8")
+	myHandler.Handle("/app", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
+	rep := func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	}
+	myHandler.Handle("GET /metrics", apiCfg.getHits())
+	myHandler.HandleFunc("GET /healthz", rep)
+	myHandler.Handle("POST 	/reset", apiCfg.resetHits())
 
-	myHandler.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.Dir("."))))
-	myHandler.HandleFunc("/healthz", readiness_endpoint)
-
-	s := &http.Server{
-		Addr:           ":8080",
-		Handler:        myHandler,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		MaxHeaderBytes: 1 << 20,
+	s := http.Server{
+		Addr:    ":8080",
+		Handler: myHandler,
 	}
 	log.Fatal(s.ListenAndServe())
 }
