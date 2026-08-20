@@ -39,15 +39,15 @@ func main() {
 
 	apiCfg := apiConfig{}
 	myHandler := http.NewServeMux()
-	myHandler.Handle("/app", http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
+	myHandler.Handle("/app/", http.StripPrefix("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
 	rep := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	}
-	myHandler.Handle("GET /metrics", apiCfg.getHits())
-	myHandler.HandleFunc("GET /healthz", rep)
-	myHandler.Handle("POST 	/reset", apiCfg.resetHits())
+	myHandler.Handle("GET /api/metrics", apiCfg.getHits())
+	myHandler.HandleFunc("GET /api/healthz", rep)
+	myHandler.Handle("POST 	/api/reset", apiCfg.resetHits())
 
 	s := http.Server{
 		Addr:    ":8080",
