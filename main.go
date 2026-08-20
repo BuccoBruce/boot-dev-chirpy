@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -21,9 +21,17 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 func (cfg *apiConfig) getHits() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		myHits := cfg.fileserverHits.Load()
-		result := "Hits: " + strconv.Itoa(int(myHits))
+		// intHits := strconv.Itoa(int(myHits))
+		result := fmt.Sprintf(`
+			<html>
+				<body>
+    				<h1>Welcome, Chirpy Admin</h1>
+        			<p>Chirpy has been visited %d times!</p>
+  				</body>
+			</html>
+			`, int(myHits))
 
-		w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Add("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(200)
 		w.Write([]byte(result))
 	})
@@ -45,9 +53,9 @@ func main() {
 		w.WriteHeader(200)
 		w.Write([]byte("OK"))
 	}
-	myHandler.Handle("GET /api/metrics", apiCfg.getHits())
+	myHandler.Handle("GET /admin/metrics", apiCfg.getHits())
 	myHandler.HandleFunc("GET /api/healthz", rep)
-	myHandler.Handle("POST 	/api/reset", apiCfg.resetHits())
+	myHandler.Handle("GET 	/admin/reset", apiCfg.resetHits())
 
 	s := http.Server{
 		Addr:    ":8080",
