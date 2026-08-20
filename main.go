@@ -10,12 +10,13 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/buccobruce/database"
+	"github.com/BuccoBruce/boot-dev-chirpy/internal/database"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
+	db             *database.Queries
 	fileserverHits atomic.Int32
 }
 
