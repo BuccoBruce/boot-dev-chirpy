@@ -143,6 +143,25 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 	respondWithJson(w, 201, responseChirps)
 }
 
+func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	id, err := uuid.Parse(chirpID)
+	if err != nil {
+		log.Printf("Invalid UUID: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	responseChirp, err := cfg.db.GetChirp(r.Context(), id)
+	if err != nil {
+		log.Printf("Error returning chirp: %s", err)
+		w.WriteHeader(404)
+		return
+	}
+
+	respondWithJson(w, 200, responseChirp)
+}
+
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	payload := map[string]string{
 		"error": msg,
@@ -250,6 +269,7 @@ func main() {
 	myHandler.HandleFunc("POST /api/users", apiCfg.createUser)
 	myHandler.HandleFunc("POST /api/chirps", chirp)
 	myHandler.HandleFunc("GET /api/chirps", apiCfg.getChirps)
+	myHandler.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirp)
 	s := http.Server{
 		Addr:    ":8080",
 		Handler: myHandler,
