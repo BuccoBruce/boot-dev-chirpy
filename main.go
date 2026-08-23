@@ -9,8 +9,10 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/BuccoBruce/boot-dev-chirpy/internal/database"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -18,6 +20,22 @@ import (
 type apiConfig struct {
 	db             *database.Queries
 	fileserverHits atomic.Int32
+	PLATFORM       string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+}
+
+type Chirp struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Body      string    `json:"body"`
+	UserID    uuid.UUID `json:"user_id"`
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -50,6 +68,58 @@ func (cfg *apiConfig) resetHits() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg.fileserverHits.Store(0)
 	})
+}
+
+func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	var requestJson = parameters{}
+	err := json.NewDecoder(r.Body).Decode(&requestJson)
+	if err != nil {
+		log.Printf("Error decoding JSON: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), requestJson.Email)
+	if err != nil {
+		log.Printf("Error creating user: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	responseUser := User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	responseJson, err := json.Marshal(responseUser)
+	if err != nil {
+		log.Printf("Error encoding JSON: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(201)
+	w.Write(responseJson)
+}
+
+func (cfg *apiConfig) deleteUsers(w http.ResponseWriter, r *http.Request) {
+	if cfg.PLATFORM != "dev" {
+		w.WriteHeader(403)
+		return
+	}
+	_, err := cfg.db.DeleteUsers(r.Context())
+	if err != nil {
+		w.WriteHeader(500)
+		log.Printf("Error processing deletion: %s", err)
+		return
+	}
+	w.WriteHeader(200)
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -104,6 +174,9 @@ func main() {
 	dbQueries := database.New(db)
 
 	apiCfg := apiConfig{}
+	apiCfg.db = dbQueries
+	apiCfg.PLATFORM = os.Getenv("PLATFORM")
+
 	myHandler := http.NewServeMux()
 	myHandler.Handle("/app/", http.StripPrefix("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
 	rep := func(w http.ResponseWriter, _ *http.Request) {
@@ -114,7 +187,8 @@ func main() {
 
 	chirp := func(w http.ResponseWriter, r *http.Request) {
 		type parameters struct {
-			Body string `json:"body"`
+			Body   string    `json:"body"`
+			UserID uuid.UUID `json:"user_id"`
 		}
 		type cleanedParameters struct {
 			Body string `json:"cleaned_body"`
@@ -134,14 +208,26 @@ func main() {
 		}
 
 		cleanedParams.Body = filterChirp(params.Body)
-		respondWithJson(w, 200, cleanedParams)
+
+		c, err := apiCfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+			Body:   cleanedParams.Body,
+			UserID: params.UserID,
+		})
+		if err != nil {
+			log.Printf("Error creating chirp: %s", err)
+			w.WriteHeader(500)
+			return
+		}
+		respondWithJson(w, 201, c)
 	}
 
 	myHandler.Handle("GET /admin/metrics", apiCfg.getHits())
 	myHandler.HandleFunc("GET /api/healthz", rep)
-	myHandler.Handle("GET 	/admin/reset", apiCfg.resetHits())
-	myHandler.Handle("POST 	/admin/reset", apiCfg.resetHits())
-	myHandler.HandleFunc("POST /api/validate_chirp", chirp)
+	myHandler.Handle("GET /admin/reset", apiCfg.resetHits())
+	myHandler.HandleFunc("POST /admin/reset", apiCfg.deleteUsers)
+	// myHandler.HandleFunc("POST /api/validate_chirp", chirp)
+	myHandler.HandleFunc("POST /api/users", apiCfg.createUser)
+	myHandler.HandleFunc("POST /api/chirps", chirp)
 
 	s := http.Server{
 		Addr:    ":8080",

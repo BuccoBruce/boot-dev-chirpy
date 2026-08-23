@@ -1,3 +1,4 @@
+
 -- name: CreateUser :one
 INSERT INTO users (id, created_at, updated_at, email)
 VALUES (
@@ -7,3 +8,6 @@ VALUES (
     $1
 )
 RETURNING *;
+
+-- name: DeleteUsers :execresult
+DELETE FROM users;
