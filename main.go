@@ -122,6 +122,27 @@ func (cfg *apiConfig) deleteUsers(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(200)
 }
 
+func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.db.GetChirps(r.Context())
+	if err != nil {
+		log.Printf("Error getting chirps: %s", err)
+		w.WriteHeader(500)
+		return
+	}
+	responseChirps := []Chirp{}
+
+	for _, v := range chirps {
+		responseChirps = append(responseChirps, Chirp{
+			ID:        v.ID,
+			CreatedAt: v.CreatedAt,
+			UpdatedAt: v.UpdatedAt,
+			Body:      v.Body,
+			UserID:    v.UserID,
+		})
+	}
+	respondWithJson(w, 201, responseChirps)
+}
+
 func respondWithError(w http.ResponseWriter, code int, msg string) {
 	payload := map[string]string{
 		"error": msg,
@@ -228,7 +249,7 @@ func main() {
 	// myHandler.HandleFunc("POST /api/validate_chirp", chirp)
 	myHandler.HandleFunc("POST /api/users", apiCfg.createUser)
 	myHandler.HandleFunc("POST /api/chirps", chirp)
-
+	myHandler.HandleFunc("GET /api/chirps", apiCfg.getChirps)
 	s := http.Server{
 		Addr:    ":8080",
 		Handler: myHandler,
