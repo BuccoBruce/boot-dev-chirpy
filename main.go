@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BuccoBruce/boot-dev-chirpy/internal/auth"
 	"github.com/BuccoBruce/boot-dev-chirpy/internal/database"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -72,7 +73,8 @@ func (cfg *apiConfig) resetHits() http.Handler {
 
 func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 	var requestJson = parameters{}
 	err := json.NewDecoder(r.Body).Decode(&requestJson)
@@ -82,7 +84,17 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := cfg.db.CreateUser(r.Context(), requestJson.Email)
+	hashedPassword, err := auth.HashPassword(requestJson.Password)
+	if err != nil {
+		log.Printf("Could not hash password")
+		w.WriteHeader(500)
+		return
+	}
+
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email:          requestJson.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		log.Printf("Error creating user: %s", err)
 		w.WriteHeader(500)
@@ -160,6 +172,49 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondWithJson(w, 200, responseChirp)
+}
+
+func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}
+
+	var responseUser = User{}
+
+	var requestJson = parameters{}
+	err := json.NewDecoder(r.Body).Decode(&requestJson)
+	if err != nil {
+		log.Printf("Error decoding JSON: %s", err)
+		w.WriteHeader(400)
+		return
+	}
+
+	dbUser, err := cfg.db.GetUser(r.Context(), requestJson.Email)
+	if err != nil {
+		log.Printf("Error getting user by email %s", err)
+		w.WriteHeader(500)
+		return
+	}
+
+	checkBool, err := auth.CheckPasswordHash(requestJson.Password, dbUser.HashedPassword)
+	if err != nil {
+		log.Printf("Password validation failed")
+		w.WriteHeader(401)
+		return
+	}
+	if checkBool != true {
+		log.Printf("Incorrect email or password")
+		w.WriteHeader(401)
+		return
+	}
+
+	responseUser.ID = dbUser.ID
+	responseUser.CreatedAt = dbUser.CreatedAt
+	responseUser.UpdatedAt = dbUser.UpdatedAt
+	responseUser.Email = dbUser.Email
+
+	respondWithJson(w, 200, responseUser)
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -270,6 +325,7 @@ func main() {
 	myHandler.HandleFunc("POST /api/chirps", chirp)
 	myHandler.HandleFunc("GET /api/chirps", apiCfg.getChirps)
 	myHandler.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirp)
+	myHandler.HandleFunc("POST /api/login", apiCfg.login)
 	s := http.Server{
 		Addr:    ":8080",
 		Handler: myHandler,
