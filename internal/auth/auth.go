@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"log"
 	"time"
 
@@ -49,8 +50,29 @@ func MakeJWT(userID uuid.UUID, tokenSecret string, expiresIn time.Duration) (str
 	return s, nil
 }
 
-func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error){
-	
-	
-	return uuid.UUID{}, nil
+func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
+	claims := &jwt.RegisteredClaims{}
+
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, fmt.Errorf("Bad signing method")
+		}
+		return []byte(tokenSecret), nil
+	},
+	)
+
+	if err != nil {
+		return uuid.UUID{}, err
+	}
+
+	if !token.Valid {
+		return uuid.UUID{}, fmt.Errorf("invalid token %v", err)
+	}
+
+	userId, err := uuid.Parse(claims.Subject)
+	if err != nil {
+		return uuid.UUID{}, err
+	}
+
+	return userId, nil
 }
