@@ -178,6 +178,17 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "Could not get API key")
+		return
+	}
+
+	if apiKey != cfg.POLKA_KEY {
+		respondWithError(w, 401, "provided API key does not match")
+		return
+	}
+
 	type webhookData struct {
 		UserID uuid.UUID `json:"user_id"`
 	}
@@ -189,7 +200,7 @@ func (cfg *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var params webhookRequest
 
-	err := json.NewDecoder(r.Body).Decode(&params)
+	err = json.NewDecoder(r.Body).Decode(&params)
 	if err != nil {
 		respondWithError(w, 400, "Invalid request body")
 		return
@@ -229,11 +240,40 @@ func (cfg *apiConfig) deleteUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.db.GetChirps(r.Context())
+	authorId := r.URL.Query().Get("author_id")
+	sortOrder := r.URL.Query().Get("sort")
+
+	if sortOrder != "" && sortOrder != "asc" && sortOrder != "desc" {
+		respondWithError(w, 400, "Invalid sort parameter")
+		return
+	}
+
+	var chirps []database.Chirp
+
+	var err error
+
+	if authorId != "" {
+		id, parseErr := uuid.Parse(authorId)
+		if parseErr != nil {
+			respondWithError(w, 400, "Invalid author_id")
+			return
+		}
+
+		chirps, err = cfg.db.GetChirpsByAuthor(r.Context(), id)
+	} else {
+		chirps, err = cfg.db.GetChirps(r.Context())
+	}
+
 	if err != nil {
 		log.Printf("Error getting chirps: %s", err)
 		w.WriteHeader(500)
 		return
+	}
+
+	if sortOrder == "desc" {
+		for i, j := 0, len(chirps)-1; i < j; i, j = i+1, j-1 {
+			chirps[i], chirps[j] = chirps[j], chirps[i]
+		}
 	}
 	responseChirps := []Chirp{}
 
@@ -504,6 +544,7 @@ func main() {
 	apiCfg.db = dbQueries
 	apiCfg.PLATFORM = os.Getenv("PLATFORM")
 	apiCfg.SECRET = os.Getenv("SECRET")
+	apiCfg.POLKA_KEY = os.Getenv("POLKA_KEY")
 
 	myHandler := http.NewServeMux()
 	myHandler.Handle("/app/", http.StripPrefix("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
