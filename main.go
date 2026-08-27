@@ -23,6 +23,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	PLATFORM       string
 	SECRET         string
+	POLKA_KEY      string
 }
 
 type User struct {
@@ -32,6 +33,7 @@ type User struct {
 	Email        string    `json:"email"`
 	Token        string    `json:"token"`
 	RefreshToken string    `json:"refresh_token"`
+	IsChirpyRed  bool      `json:"is_chirpy_red"`
 }
 
 type Chirp struct {
@@ -105,10 +107,11 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseUser := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	responseJson, err := json.Marshal(responseUser)
@@ -165,12 +168,50 @@ func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseUser := User{
-		ID:        user.ID,
-		CreatedAt: user.CreatedAt,
-		UpdatedAt: user.UpdatedAt,
-		Email:     user.Email,
+		ID:          user.ID,
+		CreatedAt:   user.CreatedAt,
+		UpdatedAt:   user.UpdatedAt,
+		Email:       user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 	respondWithJson(w, 200, responseUser)
+}
+
+func (cfg *apiConfig) polkaWebhook(w http.ResponseWriter, r *http.Request) {
+	type webhookData struct {
+		UserID uuid.UUID `json:"user_id"`
+	}
+
+	type webhookRequest struct {
+		Event string      `json:"event"`
+		Data  webhookData `json:"data"`
+	}
+
+	var params webhookRequest
+
+	err := json.NewDecoder(r.Body).Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, "Invalid request body")
+		return
+	}
+
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(204)
+		return
+	}
+
+	_, err = cfg.db.UpgradeUser(r.Context(), params.Data.UserID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			respondWithError(w, 404, "User not found")
+			return
+		}
+
+		respondWithError(w, 500, "Could not upgrade user")
+		return
+	}
+
+	w.WriteHeader(204)
 }
 
 func (cfg *apiConfig) deleteUsers(w http.ResponseWriter, r *http.Request) {
@@ -345,6 +386,7 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	responseUser.Email = dbUser.Email
 	responseUser.Token = token
 	responseUser.RefreshToken = refreshToken
+	responseUser.IsChirpyRed = dbUser.IsChirpyRed
 
 	respondWithJson(w, 200, responseUser)
 }
@@ -534,6 +576,7 @@ func main() {
 	myHandler.HandleFunc("POST /api/refresh", apiCfg.refresh)
 	myHandler.HandleFunc("POST /api/revoke", apiCfg.revoke)
 	myHandler.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp)
+	myHandler.HandleFunc("POST /api/polka/webhooks", apiCfg.polkaWebhook)
 	s := http.Server{
 		Addr:    ":8080",
 		Handler: myHandler,
