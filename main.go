@@ -22,6 +22,7 @@ type apiConfig struct {
 	db             *database.Queries
 	fileserverHits atomic.Int32
 	PLATFORM       string
+	SECRET         string
 }
 
 type User struct {
@@ -29,6 +30,7 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Email     string    `json:"email"`
+	Token     string    `json:"token"`
 }
 
 type Chirp struct {
@@ -176,8 +178,9 @@ func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
 
 func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 
 	var responseUser = User{}
@@ -190,6 +193,15 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expiresIn := time.Hour
+
+	if requestJson.ExpiresInSeconds > 0 {
+		expiresIn = time.Duration(requestJson.ExpiresInSeconds) * time.Second
+
+		if expiresIn > time.Hour {
+			expiresIn = time.Hour
+		}
+	}
 	dbUser, err := cfg.db.GetUser(r.Context(), requestJson.Email)
 	if err != nil {
 		log.Printf("Error getting user by email %s", err)
@@ -209,10 +221,22 @@ func (cfg *apiConfig) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	token, err := auth.MakeJWT(
+		dbUser.ID,
+		cfg.SECRET,
+		expiresIn,
+	)
+	if err != nil {
+		log.Printf("Error creating JWT", err)
+		w.WriteHeader(500)
+		return
+	}
+
 	responseUser.ID = dbUser.ID
 	responseUser.CreatedAt = dbUser.CreatedAt
 	responseUser.UpdatedAt = dbUser.UpdatedAt
 	responseUser.Email = dbUser.Email
+	responseUser.Token = token
 
 	respondWithJson(w, 200, responseUser)
 }
@@ -271,6 +295,7 @@ func main() {
 	apiCfg := apiConfig{}
 	apiCfg.db = dbQueries
 	apiCfg.PLATFORM = os.Getenv("PLATFORM")
+	apiCfg.SECRET = os.Getenv("SECRET")
 
 	myHandler := http.NewServeMux()
 	myHandler.Handle("/app/", http.StripPrefix("/app/", apiCfg.middlewareMetricsInc(http.FileServer(http.Dir("./app")))))
@@ -281,9 +306,22 @@ func main() {
 	}
 
 	chirp := func(w http.ResponseWriter, r *http.Request) {
+
+		tokenString, err := auth.GetBearerToken(r.Header)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
+			return
+		}
+
+		userID, err := auth.ValidateJWT(tokenString, apiCfg.SECRET)
+		if err != nil {
+			respondWithError(w, 401, "Unauthorized")
+			return
+		}
+
 		type parameters struct {
-			Body   string    `json:"body"`
-			UserID uuid.UUID `json:"user_id"`
+			Body string `json:"body"`
+			// UserID uuid.UUID `json:"user_id"`
 		}
 		type cleanedParameters struct {
 			Body string `json:"cleaned_body"`
@@ -292,7 +330,7 @@ func main() {
 		decoder := json.NewDecoder(r.Body)
 		params := parameters{}
 		cleanedParams := cleanedParameters{}
-		err := decoder.Decode(&params)
+		err = decoder.Decode(&params)
 		if err != nil {
 			respondWithError(w, 400, "Error decoding parameters")
 			return
@@ -306,7 +344,7 @@ func main() {
 
 		c, err := apiCfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
 			Body:   cleanedParams.Body,
-			UserID: params.UserID,
+			UserID: userID,
 		})
 		if err != nil {
 			log.Printf("Error creating chirp: %s", err)
