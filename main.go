@@ -123,6 +123,56 @@ func (cfg *apiConfig) createUser(w http.ResponseWriter, r *http.Request) {
 	w.Write(responseJson)
 }
 
+func (cfg *apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(tokenString, cfg.SECRET)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+	}
+
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+
+	var params parameters
+
+	err = json.NewDecoder(r.Body).Decode(&params)
+	if err != nil {
+		respondWithError(w, 400, "Invalid request body")
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(params.Password)
+	if err != nil {
+		respondWithError(w, 500, "Could not hash password")
+		return
+	}
+
+	user, err := cfg.db.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          params.Email,
+		HashedPassword: hashedPassword,
+		ID:             userID,
+	})
+	if err != nil {
+		respondWithError(w, 500, "Could not update user")
+		return
+	}
+
+	responseUser := User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+	respondWithJson(w, 200, responseUser)
+}
+
 func (cfg *apiConfig) deleteUsers(w http.ResponseWriter, r *http.Request) {
 	if cfg.PLATFORM != "dev" {
 		w.WriteHeader(403)
@@ -156,6 +206,47 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	respondWithJson(w, 201, responseChirps)
+}
+
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+	tokenString, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	userID, err := auth.ValidateJWT(tokenString, cfg.SECRET)
+	if err != nil {
+		respondWithError(w, 401, "Unauthorized")
+		return
+	}
+
+	chirpIDString := r.PathValue("chirpID")
+
+	chirpID, err := uuid.Parse(chirpIDString)
+	if err != nil {
+		respondWithError(w, 404, "Chirp not found")
+		return
+	}
+
+	chirp, err := cfg.db.GetChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, 404, "Chirp not found")
+		return
+	}
+
+	if chirp.UserID != userID {
+		respondWithError(w, 403, "Forbidden")
+		return
+	}
+
+	err = cfg.db.DeleteChirp(r.Context(), chirpID)
+	if err != nil {
+		respondWithError(w, 500, "Could not delete chirp")
+		return
+	}
+
+	w.WriteHeader(204)
 }
 
 func (cfg *apiConfig) getChirp(w http.ResponseWriter, r *http.Request) {
@@ -435,12 +526,14 @@ func main() {
 	myHandler.HandleFunc("POST /admin/reset", apiCfg.deleteUsers)
 	// myHandler.HandleFunc("POST /api/validate_chirp", chirp)
 	myHandler.HandleFunc("POST /api/users", apiCfg.createUser)
+	myHandler.HandleFunc("PUT /api/users", apiCfg.updateUser)
 	myHandler.HandleFunc("POST /api/chirps", chirp)
 	myHandler.HandleFunc("GET /api/chirps", apiCfg.getChirps)
 	myHandler.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.getChirp)
 	myHandler.HandleFunc("POST /api/login", apiCfg.login)
 	myHandler.HandleFunc("POST /api/refresh", apiCfg.refresh)
 	myHandler.HandleFunc("POST /api/revoke", apiCfg.revoke)
+	myHandler.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.deleteChirp)
 	s := http.Server{
 		Addr:    ":8080",
 		Handler: myHandler,
